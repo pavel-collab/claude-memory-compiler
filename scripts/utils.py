@@ -95,11 +95,15 @@ def list_wiki_articles() -> list[Path]:
     return articles
 
 
-def list_raw_files() -> list[Path]:
-    """List all daily log files."""
+def list_raw_files(since: str | None = None) -> list[Path]:
+    """List daily logs on or after an optional ISO date (inclusive)."""
+    if since is not None:
+        from datetime import date
+
+        since = date.fromisoformat(since).isoformat()
     if not DAILY_DIR.exists():
         return []
-    return sorted(DAILY_DIR.glob("*.md"))
+    return sorted(path for path in DAILY_DIR.glob("*.md") if since is None or path.stem >= since)
 
 
 # ── Index helpers ─────────────────────────────────────────────────────

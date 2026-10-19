@@ -14,29 +14,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from pathlib import Path
-
-from config import KNOWLEDGE_DIR, QA_DIR, now_iso
+import sys
+from config import AGENTS_FILE, KNOWLEDGE_DIR, QA_DIR, now_iso
 from utils import load_state, read_all_wiki_content, save_state
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-
 
 async def run_query(question: str, file_back: bool = False) -> str:
     """Query the knowledge base and optionally file the answer back."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
+    from llm import record_usage, run_llm
 
     wiki_content = read_all_wiki_content()
-
-    tools = ["Read", "Glob", "Grep"]
-    if file_back:
-        tools.extend(["Write", "Edit"])
 
     file_back_instructions = ""
     if file_back:
@@ -44,6 +30,13 @@ async def run_query(question: str, file_back: bool = False) -> str:
         file_back_instructions = f"""
 
 ## File Back Instructions
+
+Use the article formats from this schema:
+
+{AGENTS_FILE.read_text(encoding="utf-8")}
+
+The actual wiki root is {KNOWLEDGE_DIR}. All knowledge/ paths in the schema
+refer to this directory. Do not create a knowledge/ subdirectory.
 
 After answering, do the following:
 1. Create a Q&A article at {QA_DIR}/ with the filename being a slugified version
@@ -79,36 +72,13 @@ consulting the knowledge base below.
 {question}
 {file_back_instructions}"""
 
-    answer = ""
-    cost = 0.0
+    result = await run_llm(prompt, write=file_back)
 
-    try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                system_prompt={"type": "preset", "preset": "claude_code"},
-                allowed_tools=tools,
-                permission_mode="acceptEdits",
-                max_turns=15,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        answer += block.text
-            elif isinstance(message, ResultMessage):
-                cost = message.total_cost_usd or 0.0
-    except Exception as e:
-        answer = f"Error querying knowledge base: {e}"
-
-    # Update state
     state = load_state()
     state["query_count"] = state.get("query_count", 0) + 1
-    state["total_cost"] = state.get("total_cost", 0.0) + cost
+    record_usage(state, result.usage)
     save_state(state)
-
-    return answer
+    return result.text
 
 
 def main():
@@ -125,7 +95,11 @@ def main():
     print(f"File back: {'yes' if args.file_back else 'no'}")
     print("-" * 60)
 
-    answer = asyncio.run(run_query(args.question, file_back=args.file_back))
+    try:
+        answer = asyncio.run(run_query(args.question, file_back=args.file_back))
+    except Exception as e:
+        print(f"Error querying knowledge base: {e}", file=sys.stderr)
+        sys.exit(1)
     print(answer)
 
     if args.file_back:

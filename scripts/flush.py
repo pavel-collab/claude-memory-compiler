@@ -2,7 +2,7 @@
 Memory flush agent - extracts important knowledge from conversation context.
 
 Spawned by session-end.py or pre-compact.py as a background process. Reads
-pre-extracted conversation context from a .md file, uses the Claude Agent SDK
+pre-extracted conversation context from a .md file, uses the Codex SDK
 to decide what's worth saving, and appends the result to today's daily log.
 
 Usage:
@@ -76,14 +76,8 @@ def append_to_daily_log(content: str, section: str = "Session") -> None:
 
 
 async def run_flush(context: str) -> str:
-    """Use Claude Agent SDK to extract important knowledge from conversation context."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
+    """Use Codex SDK to extract important knowledge from conversation context."""
+    from llm import run_llm
 
     prompt = f"""Review the conversation context below and respond with a concise summary
 of important items that should be preserved in the daily log.
@@ -120,20 +114,8 @@ respond with exactly: FLUSH_OK
     response = ""
 
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT),
-                allowed_tools=[],
-                max_turns=2,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        response += block.text
-            elif isinstance(message, ResultMessage):
-                pass
+        result = await run_llm(prompt, tools=False)
+        response = result.text
     except Exception as e:
         import traceback
         logging.error("Agent SDK error: %s\n%s", e, traceback.format_exc())
@@ -229,14 +211,14 @@ def main():
     response = asyncio.run(run_flush(context))
 
     # Append to daily log
-    if "FLUSH_OK" in response:
+    if response.strip() == "FLUSH_OK":
         logging.info("Result: FLUSH_OK")
         append_to_daily_log(
             "FLUSH_OK - Nothing worth saving from this session", "Memory Flush"
         )
-    elif "FLUSH_ERROR" in response:
+    elif response.startswith("FLUSH_ERROR:"):
         logging.error("Result: %s", response)
-        append_to_daily_log(response, "Memory Flush")
+        return  # Keep the context for retry; do not mark a failed flush as saved.
     else:
         logging.info("Result: saved to daily log (%d chars)", len(response))
         append_to_daily_log(response, "Session")

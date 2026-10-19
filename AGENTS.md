@@ -19,6 +19,10 @@ You don't manually organize your knowledge. You have conversations, and the LLM 
 
 ## Architecture
 
+In this installation, `daily/` and `knowledge/` below are logical names.
+Their actual paths are `ProjectsRootVault/daily/` and `ProjectsRootVault/wiki/`,
+configured in `scripts/config.py`. Always use those configured paths.
+
 ### Layer 1: `daily/` - Conversation Logs (Immutable Source)
 
 Daily logs capture what happened in your AI coding sessions. These are the "raw sources" - append-only, never edited after the fact.
@@ -308,6 +312,7 @@ llm-personal-kb/
 |   |-- query.py                     #   Ask questions (index-guided, no RAG)
 |   |-- lint.py                      #   7 health checks
 |   |-- flush.py                     #   Extract memories from conversations (background)
+|   |-- llm.py                       #   Shared Codex SDK runner
 |   |-- config.py                    #   Path constants
 |   |-- utils.py                     #   Shared helpers
 |-- hooks/                           # Claude Code hooks
@@ -319,7 +324,21 @@ llm-personal-kb/
 
 ---
 
-## Hook System (Automatic Capture)
+## Codex Capture
+
+Codex user-level hooks are configured from `hooks/codex-hooks.json`, installed in
+`~/.codex/hooks.json`. Trust them through `/hooks` before use. `SessionStart` loads
+context; `Stop`, `PreCompact`, and `SessionEnd` run `hooks/codex-session.py` to queue
+transcript snapshots. `scripts/codex_capture.py` extracts new messages through the
+shared Codex SDK runner and appends summaries to daily logs. Per-session cursors
+and locks prevent repeated extraction. Failed snapshots remain for retry.
+
+`CODEX_MEMORY_INTERNAL=1` prevents the compiler's own SDK sessions from being
+captured. Logs and cursor files are under `scripts/codex-capture*` and ignored by
+version control. Claude Code configuration and handlers are not modified by this
+integration. Codex capture does not automatically compile the wiki.
+
+## Hook System (Claude Code Capture)
 
 Hooks are configured in `.claude/settings.json` and fire automatically when you use Claude Code in this project.
 
@@ -348,7 +367,7 @@ Commands use simple relative paths from the project root. Empty `matcher` catche
 
 **`session-end.py`** (SessionEnd)
 - Reads hook input from stdin (JSON with `session_id`, `transcript_path`, `cwd`)
-- Copies the raw JSONL transcript to a temp file (no parsing in the hook - keeps it fast)
+- Extracts recent conversation text from JSONL into a temporary Markdown file
 - Spawns `flush.py` as a fully detached background process
 - Recursion guard: exits immediately if `CLAUDE_INVOKED_BY` env var is set
 
@@ -372,11 +391,11 @@ This ensures flush.py survives after Claude Code's hook process exits.
 1. Sets `CLAUDE_INVOKED_BY=memory_flush` env var (prevents recursive hook firing)
 2. Reads the pre-extracted conversation context from the temp `.md` file
 3. Skips if context is empty or if same session was flushed within 60 seconds (deduplication)
-4. Calls Claude Agent SDK (`query()` with `allowed_tools=[]`, `max_turns=2`)
-5. Claude decides what's worth saving - returns structured bullet points or `FLUSH_OK`
+4. Calls Codex SDK through `llm.run_llm()` in read-only text mode
+5. Codex decides what's worth saving - returns structured bullet points or `FLUSH_OK`
 6. Appends result to `daily/YYYY-MM-DD.md`
 7. Cleans up temp context file
-8. **End-of-day auto-compilation:** If it's past 6 PM local time (`COMPILE_AFTER_HOUR = 18`) and today's daily log has changed since its last compilation (hash comparison against `state.json`), spawns `compile.py` as another detached background process. This means compilation happens automatically once a day without needing a cron job or manual trigger.
+8. **End-of-day auto-compilation:** Currently disabled (`COMPILE_AFTER_HOUR = 25`). When set to 18, if it is past 6 PM local time and today's daily log has changed since its last compilation (hash comparison against `state.json`), spawns `compile.py` as another detached background process. This means compilation happens automatically once a day without needing a cron job or manual trigger.
 
 ### JSONL Transcript Format
 
@@ -397,26 +416,20 @@ Content can be a string or a list of blocks (`{"type": "text", "text": "..."}` d
 
 ### compile.py - The Compiler
 
-Uses the Claude Agent SDK's async streaming `query()`:
+Uses the Python Codex SDK through the shared `scripts/llm.py` adapter:
 
 ```python
-async for message in query(
-    prompt=compile_prompt,
-    options=ClaudeAgentOptions(
-        cwd=str(ROOT_DIR),
-        system_prompt={"type": "preset", "preset": "claude_code"},
-        allowed_tools=["Read", "Write", "Edit", "Glob", "Grep"],
-        permission_mode="acceptEdits",
-        max_turns=30,
-    ),
-):
+result = await run_llm(prompt, write=True, output_schema=article_manifest_schema)
 ```
 
-- Builds a prompt with: AGENTS.md schema, current index, all existing articles, and the daily log
-- Claude reads the daily log, decides what concepts to extract, and writes files directly
-- `permission_mode="acceptEdits"` auto-approves all file operations
-- Incremental: tracks SHA-256 hashes of daily logs in `state.json`, skips unchanged files
-- Cost: ~$0.45-0.65 per daily log (increases as KB grows)
+- Builds a prompt with AGENTS.md, the current index, and the daily log.
+- Codex reads relevant existing articles and writes files in the configured wiki.
+- Uses an ephemeral thread, a workspace-write sandbox, and denied escalations.
+- Validates the article manifest, source references, index, and build log before
+  saving the source hash. Failed or interrupted work is not marked as compiled.
+- Incremental: tracks SHA-256 hashes in `state.json`, skips unchanged files.
+- Stores token usage; historical Claude dollar costs are preserved, not extended.
+- Wiki edits are not transactional; a failed run may leave partial changes.
 
 **CLI:**
 ```bash
@@ -467,10 +480,12 @@ Reports saved to `reports/lint-YYYY-MM-DD.md`.
 ## State Tracking
 
 `scripts/state.json` tracks:
-- `ingested` - map of daily log filenames to SHA-256 hashes, compilation timestamps, and costs
+- `compile_from` - optional inclusive ISO date cutoff for automatic selection, `--all`, and source lint checks; explicit `--file` bypasses it
+- `ingested` - daily log hashes, compilation timestamps, provider, and token usage
 - `query_count` - total queries run
 - `last_lint` - timestamp of most recent lint
-- `total_cost` - cumulative API cost
+- `total_cost` - historical Claude API cost, retained for compatibility
+- `codex_usage` - cumulative Codex token usage from compilation and queries
 
 `scripts/last-flush.json` tracks flush deduplication (session_id + timestamp).
 
@@ -481,25 +496,26 @@ Both are gitignored and regenerated automatically.
 ## Dependencies
 
 `pyproject.toml` (at project root):
-- `claude-agent-sdk>=0.1.29` - Claude Agent SDK for LLM calls with tool use
+- `openai-codex==0.163.0` - Python Codex SDK with a pinned local runtime
 - `python-dotenv>=1.0.0` - Environment variable management
 - `tzdata>=2024.1` - Timezone data
 - Python 3.12+, managed by [uv](https://docs.astral.sh/uv/)
 
-No API key needed - uses Claude Code's built-in credentials at `~/.claude/.credentials.json`.
+Uses local Codex authentication configured with `codex login`. Set `CODEX_MODEL`
+to override the configured default model. Claude Code hooks remain the capture layer.
 
 ---
 
-## Costs
+## Usage and Tests
 
-| Operation | Cost |
-|-----------|------|
-| Compile one daily log | $0.45-0.65 |
-| Query (no file-back) | ~$0.15-0.25 |
-| Query (with file-back) | ~$0.25-0.40 |
-| Full lint (with contradictions) | ~$0.15-0.25 |
-| Structural lint only | $0.00 |
-| Memory flush (per session) | ~$0.02-0.05 |
+Codex returns token usage rather than Claude's `total_cost_usd`. No dollar costs
+are estimated. Structural lint does not call a model.
+
+Run offline regression tests with:
+
+```bash
+uv run --frozen python -m unittest discover -s tests -v
+```
 
 ---
 

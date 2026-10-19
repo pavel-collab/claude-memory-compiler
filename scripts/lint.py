@@ -73,7 +73,7 @@ def check_orphan_sources() -> list[dict]:
     state = load_state()
     ingested = state.get("ingested", {})
     issues = []
-    for log_path in list_raw_files():
+    for log_path in list_raw_files(since=state.get("compile_from")):
         if log_path.name not in ingested:
             issues.append({
                 "severity": "warning",
@@ -89,7 +89,7 @@ def check_stale_articles() -> list[dict]:
     state = load_state()
     ingested = state.get("ingested", {})
     issues = []
-    for log_path in list_raw_files():
+    for log_path in list_raw_files(since=state.get("compile_from")):
         rel = log_path.name
         if rel in ingested:
             stored_hash = ingested[rel].get("hash", "")
@@ -147,13 +147,7 @@ def check_sparse_articles() -> list[dict]:
 
 async def check_contradictions() -> list[dict]:
     """Use LLM to detect contradictions across articles."""
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
+    from llm import run_llm
 
     wiki_content = read_all_wiki_content()
 
@@ -181,23 +175,18 @@ Do NOT output anything else - no preamble, no explanation, just the formatted li
 
     response = ""
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                allowed_tools=[],
-                max_turns=2,
-            ),
+        result = await run_llm(prompt, tools=False)
+        response = result.text
+        if response != "NO_ISSUES" and not all(
+            line.startswith(("CONTRADICTION:", "INCONSISTENCY:"))
+            for line in response.splitlines() if line.strip()
         ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        response += block.text
+            raise ValueError("Invalid contradiction report")
     except Exception as e:
         return [{"severity": "error", "check": "contradiction", "file": "(system)", "detail": f"LLM check failed: {e}"}]
 
     issues = []
-    if "NO_ISSUES" not in response:
+    if response != "NO_ISSUES":
         for line in response.strip().split("\n"):
             line = line.strip()
             if line.startswith("CONTRADICTION:") or line.startswith("INCONSISTENCY:"):

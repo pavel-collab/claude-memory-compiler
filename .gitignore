@@ -10,6 +10,8 @@ scripts/flush.log
 scripts/compile.log
 scripts/session-flush-*
 scripts/flush-context-*
+scripts/codex-capture/
+scripts/codex-capture.log
 
 # Generated content (built up per-user by hooks and scripts)
 daily/

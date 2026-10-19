@@ -1,0 +1,49 @@
+{
+  "description": "Personal knowledge capture from Codex sessions",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/.venv/bin/python /Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/hooks/codex-session.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/.venv/bin/python /Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/hooks/codex-session.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/.venv/bin/python /Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/hooks/codex-session.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/.venv/bin/python /Users/pavelfilippenko/Projects/MyProjects/claude-memory-compiler/hooks/codex-session.py",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

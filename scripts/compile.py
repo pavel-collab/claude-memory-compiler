@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
 from pathlib import Path
 
@@ -32,19 +33,14 @@ from utils import (
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
-async def compile_daily_log(log_path: Path, state: dict) -> float:
+async def compile_daily_log(log_path: Path, state: dict) -> bool:
     """Compile a single daily log into knowledge articles.
 
-    Returns the API cost of the compilation.
+    Returns whether compilation completed and its output was verified.
     """
-    from claude_agent_sdk import (
-        AssistantMessage,
-        ClaudeAgentOptions,
-        ResultMessage,
-        TextBlock,
-        query,
-    )
+    from llm import record_usage, run_llm
 
+    source_hash = file_hash(log_path)
     log_content = log_path.read_text(encoding="utf-8")
     schema = AGENTS_FILE.read_text(encoding="utf-8")
     wiki_index = read_wiki_index()
@@ -62,7 +58,7 @@ and extract knowledge into structured wiki articles.
 
 {wiki_index}
 
-The index above lists every existing article. Use Read/Glob/Grep to open any article
+The index above lists every existing article. Use file reading and search tools to open any article
 you need to check or update — do not assume its content, read it first.
 
 ## Daily Log to Compile
@@ -72,6 +68,12 @@ you need to check or update — do not assume its content, read it first.
 {log_content}
 
 ## Your Task
+
+The actual wiki root is {KNOWLEDGE_DIR}. All knowledge/ paths in the schema
+refer to this directory. Do not create a knowledge/ subdirectory.
+Daily logs live in {DAILY_DIR} and must not be modified.
+Return a JSON object with an articles array of wiki-relative paths of all
+created or updated articles (for example concepts/example.md).
 
 Read the daily log above and compile it into wiki articles following the schema exactly.
 
@@ -112,41 +114,55 @@ Read the daily log above and compile it into wiki articles following the schema 
 - Sources section should cite the daily log with specific claims extracted
 """
 
-    cost = 0.0
-
     try:
-        async for message in query(
-            prompt=prompt,
-            options=ClaudeAgentOptions(
-                cwd=str(ROOT_DIR),
-                system_prompt={"type": "preset", "preset": "claude_code"},
-                allowed_tools=["Read", "Write", "Edit", "Glob", "Grep"],
-                permission_mode="acceptEdits",
-                max_turns=30,
-            ),
-        ):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        pass  # compilation output - LLM writes files directly
-            elif isinstance(message, ResultMessage):
-                cost = message.total_cost_usd or 0.0
-                print(f"  Cost: ${cost:.4f}")
+        result = await run_llm(
+            prompt,
+            write=True,
+            output_schema={
+                "type": "object",
+                "properties": {
+                    "articles": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["articles"],
+                "additionalProperties": False,
+            },
+        )
+        articles = json.loads(result.text)["articles"]
+        if not isinstance(articles, list) or not articles:
+            raise ValueError("Compilation returned no articles")
+        index = (KNOWLEDGE_DIR / "index.md").read_text(encoding="utf-8")
+        build_log = (KNOWLEDGE_DIR / "log.md").read_text(encoding="utf-8")
+        for article in articles:
+            path = (KNOWLEDGE_DIR / article).resolve()
+            relative = path.relative_to(KNOWLEDGE_DIR.resolve())
+            if path.suffix != ".md" or relative.parts[0] not in {"concepts", "connections"}:
+                raise ValueError(f"Invalid article path: {article}")
+            content = path.read_text(encoding="utf-8")
+            if not content.startswith("---\n") or log_path.name not in content:
+                raise ValueError(f"Article missing frontmatter or source: {article}")
+            if f"[[{relative.with_suffix('').as_posix()}]]" not in index:
+                raise ValueError(f"Article missing from index: {article}")
+        if timestamp not in build_log or log_path.name not in build_log:
+            raise ValueError("Compilation entry missing from build log")
+        if file_hash(log_path) != source_hash:
+            raise ValueError("Source changed during compilation; retry on the next run")
     except Exception as e:
         print(f"  Error: {e}")
-        return 0.0
+        return False
 
-    # Update state
-    rel_path = log_path.name
-    state.setdefault("ingested", {})[rel_path] = {
-        "hash": file_hash(log_path),
+    state.setdefault("ingested", {})[log_path.name] = {
+        "hash": source_hash,
         "compiled_at": now_iso(),
-        "cost_usd": cost,
+        "provider": "codex",
+        "usage": result.usage,
     }
-    state["total_cost"] = state.get("total_cost", 0.0) + cost
+    record_usage(state, result.usage)
     save_state(state)
-
-    return cost
+    return True
 
 
 def main():
@@ -171,7 +187,7 @@ def main():
             sys.exit(1)
         to_compile = [target]
     else:
-        all_logs = list_raw_files()
+        all_logs = list_raw_files(since=state.get("compile_from"))
         if args.all:
             to_compile = all_logs
         else:
@@ -183,7 +199,7 @@ def main():
                     to_compile.append(log_path)
 
     if not to_compile:
-        print("Nothing to compile - all daily logs are up to date.")
+        print("Nothing to compile - no new or changed daily logs in the selected date range.")
         return
 
     print(f"{'[DRY RUN] ' if args.dry_run else ''}Files to compile ({len(to_compile)}):")
@@ -194,16 +210,19 @@ def main():
         return
 
     # Compile each file sequentially
-    total_cost = 0.0
+    failures = 0
     for i, log_path in enumerate(to_compile, 1):
         print(f"\n[{i}/{len(to_compile)}] Compiling {log_path.name}...")
-        cost = asyncio.run(compile_daily_log(log_path, state))
-        total_cost += cost
-        print(f"  Done.")
+        if asyncio.run(compile_daily_log(log_path, state)):
+            print("  Done.")
+        else:
+            failures += 1
 
     articles = list_wiki_articles()
-    print(f"\nCompilation complete. Total cost: ${total_cost:.2f}")
+    print(f"\nCompilation complete. Failed: {failures}")
     print(f"Knowledge base: {len(articles)} articles")
+    if failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
