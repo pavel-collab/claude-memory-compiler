@@ -24,10 +24,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DAILY_DIR = ROOT / "daily"
 SCRIPTS_DIR = ROOT / "scripts"
 STATE_FILE = SCRIPTS_DIR / "last-flush.json"
 LOG_FILE = SCRIPTS_DIR / "flush.log"
+
+# Import vault path from config (flush.py is in scripts/, same dir as config.py)
+sys.path.insert(0, str(SCRIPTS_DIR))
+from config import DAILY_DIR
 
 # Set up file-based logging so we can verify the background process ran.
 # The parent process sends stdout/stderr to DEVNULL (to avoid the inherited
@@ -139,7 +142,7 @@ respond with exactly: FLUSH_OK
     return response
 
 
-COMPILE_AFTER_HOUR = 18  # 6 PM local time
+COMPILE_AFTER_HOUR = 25  # disabled: set to 18 to auto-compile after 6 PM
 
 
 def maybe_trigger_compilation() -> None:

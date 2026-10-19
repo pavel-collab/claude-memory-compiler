@@ -21,10 +21,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Paths relative to project root
-ROOT = Path(__file__).resolve().parent.parent
-KNOWLEDGE_DIR = ROOT / "knowledge"
-DAILY_DIR = ROOT / "daily"
+# Vault: central knowledge base (shared across all projects)
+VAULT_DIR = Path("/Users/pavelfilippenko/Projects/ProjectsRootVault")
+KNOWLEDGE_DIR = VAULT_DIR / "wiki"
+DAILY_DIR = VAULT_DIR / "daily"
 INDEX_FILE = KNOWLEDGE_DIR / "index.md"
 
 MAX_CONTEXT_CHARS = 20_000

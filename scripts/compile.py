@@ -49,19 +49,6 @@ async def compile_daily_log(log_path: Path, state: dict) -> float:
     schema = AGENTS_FILE.read_text(encoding="utf-8")
     wiki_index = read_wiki_index()
 
-    # Read existing articles for context
-    existing_articles_context = ""
-    existing = {}
-    for article_path in list_wiki_articles():
-        rel = article_path.relative_to(KNOWLEDGE_DIR)
-        existing[str(rel)] = article_path.read_text(encoding="utf-8")
-
-    if existing:
-        parts = []
-        for rel_path, content in existing.items():
-            parts.append(f"### {rel_path}\n```markdown\n{content}\n```")
-        existing_articles_context = "\n\n".join(parts)
-
     timestamp = now_iso()
 
     prompt = f"""You are a knowledge compiler. Your job is to read a daily conversation log
@@ -75,9 +62,8 @@ and extract knowledge into structured wiki articles.
 
 {wiki_index}
 
-## Existing Wiki Articles
-
-{existing_articles_context if existing_articles_context else "(No existing articles yet)"}
+The index above lists every existing article. Use Read/Glob/Grep to open any article
+you need to check or update — do not assume its content, read it first.
 
 ## Daily Log to Compile
 

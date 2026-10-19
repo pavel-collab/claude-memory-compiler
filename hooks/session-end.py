@@ -146,6 +146,7 @@ def main() -> None:
     cmd = [
         "uv",
         "run",
+        "--frozen",
         "--directory",
         str(ROOT),
         "python",

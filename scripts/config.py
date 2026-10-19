@@ -5,11 +5,16 @@ from datetime import datetime, timezone
 
 # ── Paths ──────────────────────────────────────────────────────────────
 ROOT_DIR = Path(__file__).resolve().parent.parent
-DAILY_DIR = ROOT_DIR / "daily"
-KNOWLEDGE_DIR = ROOT_DIR / "knowledge"
+
+# Vault: central knowledge base (shared across all projects)
+VAULT_DIR = Path("/Users/pavelfilippenko/Projects/ProjectsRootVault")
+DAILY_DIR = VAULT_DIR / "daily"
+KNOWLEDGE_DIR = VAULT_DIR / "wiki"
 CONCEPTS_DIR = KNOWLEDGE_DIR / "concepts"
 CONNECTIONS_DIR = KNOWLEDGE_DIR / "connections"
 QA_DIR = KNOWLEDGE_DIR / "qa"
+
+# Compiler internals remain in the compiler project
 REPORTS_DIR = ROOT_DIR / "reports"
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 HOOKS_DIR = ROOT_DIR / "hooks"
