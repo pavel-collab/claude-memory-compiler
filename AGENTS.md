@@ -243,7 +243,8 @@ When processing a daily log:
    - If it's a new topic: CREATE a new `concepts/` article
 5. If the log reveals a non-obvious connection between 2+ existing concepts: CREATE a `connections/` article
 6. UPDATE `knowledge/index.md` with new/modified entries
-7. APPEND to `knowledge/log.md`
+7. APPEND to `knowledge/log.md`. In `scripts/compile.py`, Python performs this
+   step after validation; the Codex task must not edit the build log.
 
 **Important guidelines:**
 - A single daily log may touch 3-10 knowledge articles
@@ -424,9 +425,13 @@ result = await run_llm(prompt, write=True, output_schema=article_manifest_schema
 
 - Builds a prompt with AGENTS.md, the current index, and the daily log.
 - Codex reads relevant existing articles and writes files in the configured wiki.
+- Existing articles can be updated in any wiki section (including `projects/`
+  and `entities/`); new articles are created in `concepts/` or `connections/`.
+  The manifest excludes metadata, attachments, hidden paths, and paths outside the wiki.
 - Uses an ephemeral thread, a workspace-write sandbox, and denied escalations.
-- Validates the article manifest, source references, index, and build log before
-  saving the source hash. Failed or interrupted work is not marked as compiled.
+- Validates the article manifest, source references, index, and unchanged source.
+  Python then appends the build log entry before saving the source hash; Codex
+  must not edit the build log. Failed or interrupted work is not marked as compiled.
 - Incremental: tracks SHA-256 hashes in `state.json`, skips unchanged files.
 - Stores token usage; historical Claude dollar costs are preserved, not extended.
 - Wiki edits are not transactional; a failed run may leave partial changes.

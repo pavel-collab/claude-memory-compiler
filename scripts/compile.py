@@ -33,6 +33,17 @@ from utils import (
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
+def is_article_path(path: Path) -> bool:
+    """Distinguish wiki article paths from metadata and attachments."""
+    return (
+        not path.is_absolute()
+        and ".." not in path.parts
+        and path.suffix == ".md"
+        and path.as_posix() not in {"index.md", "log.md", "AGENTS.md", "CLAUDE.md"}
+        and not any(part.startswith(".") or part == "assets" for part in path.parts)
+    )
+
+
 async def compile_daily_log(log_path: Path, state: dict) -> bool:
     """Compile a single daily log into knowledge articles.
 
@@ -44,6 +55,12 @@ async def compile_daily_log(log_path: Path, state: dict) -> bool:
     log_content = log_path.read_text(encoding="utf-8")
     schema = AGENTS_FILE.read_text(encoding="utf-8")
     wiki_index = read_wiki_index()
+    existing_articles = {
+        path.relative_to(KNOWLEDGE_DIR).as_posix()
+        for path in KNOWLEDGE_DIR.rglob("*.md")
+        if path.is_file() and not path.is_symlink()
+        and is_article_path(path.relative_to(KNOWLEDGE_DIR))
+    }
 
     timestamp = now_iso()
 
@@ -89,21 +106,21 @@ Read the daily log above and compile it into wiki articles following the schema 
    relationships between 2+ existing concepts
 4. **Update existing articles** if this log adds new information to concepts already in the wiki
    - Read the existing article, add the new information, add the source to frontmatter
+   - Existing articles may live in any wiki section, such as projects/, entities/,
+     or self-education/. Update them in place and include their paths in the manifest.
+   - Create new articles only in concepts/ or connections/.
 5. **Update knowledge/index.md** - Add new entries to the table
    - Each entry: `| [[path/slug]] | One-line summary | source-file | {timestamp[:10]} |`
-6. **Append to knowledge/log.md** - Add a timestamped entry:
-   ```
-   ## [{timestamp}] compile | {log_path.name}
-   - Source: daily/{log_path.name}
-   - Articles created: [[concepts/x]], [[concepts/y]]
-   - Articles updated: [[concepts/z]] (if any)
-   ```
+6. **Do not edit knowledge/log.md**, even though the general schema describes
+   appending to it. The Python compiler appends the build entry itself after
+   validating your articles and index. Return every created or updated article
+   in the JSON manifest.
 
 ### File paths:
 - Write concept articles to: {CONCEPTS_DIR}
 - Write connection articles to: {CONNECTIONS_DIR}
 - Update index at: {KNOWLEDGE_DIR / 'index.md'}
-- Append log at: {KNOWLEDGE_DIR / 'log.md'}
+- Build log (managed by Python; do not edit): {KNOWLEDGE_DIR / 'log.md'}
 
 ### Quality standards:
 - Every article must have complete YAML frontmatter
@@ -135,21 +152,41 @@ Read the daily log above and compile it into wiki articles following the schema 
         if not isinstance(articles, list) or not articles:
             raise ValueError("Compilation returned no articles")
         index = (KNOWLEDGE_DIR / "index.md").read_text(encoding="utf-8")
-        build_log = (KNOWLEDGE_DIR / "log.md").read_text(encoding="utf-8")
+        verified_articles = []
         for article in articles:
+            if not isinstance(article, str) or not is_article_path(Path(article)):
+                raise ValueError(f"Invalid article path: {article}")
             path = (KNOWLEDGE_DIR / article).resolve()
             relative = path.relative_to(KNOWLEDGE_DIR.resolve())
-            if path.suffix != ".md" or relative.parts[0] not in {"concepts", "connections"}:
+            if not is_article_path(relative) or (
+                relative.as_posix() not in existing_articles
+                and (len(relative.parts) < 2 or relative.parts[0] not in {"concepts", "connections"})
+            ):
                 raise ValueError(f"Invalid article path: {article}")
             content = path.read_text(encoding="utf-8")
             if not content.startswith("---\n") or log_path.name not in content:
                 raise ValueError(f"Article missing frontmatter or source: {article}")
             if f"[[{relative.with_suffix('').as_posix()}]]" not in index:
                 raise ValueError(f"Article missing from index: {article}")
-        if timestamp not in build_log or log_path.name not in build_log:
-            raise ValueError("Compilation entry missing from build log")
+            verified_articles.append(relative.as_posix())
         if file_hash(log_path) != source_hash:
             raise ValueError("Source changed during compilation; retry on the next run")
+
+        created, updated = [], []
+        for article in dict.fromkeys(verified_articles):
+            link = f"[[{Path(article).with_suffix('').as_posix()}]]"
+            (updated if article in existing_articles else created).append(link)
+        build_log_path = KNOWLEDGE_DIR / "log.md"
+        needs_header = not build_log_path.exists() or build_log_path.stat().st_size == 0
+        with build_log_path.open("a", encoding="utf-8") as build_log:
+            if needs_header:
+                build_log.write("# Build Log\n")
+            build_log.write(
+                f"\n\n## [{timestamp}] compile | {log_path.name}\n"
+                f"- Source: daily/{log_path.name}\n"
+                f"- Articles created: {', '.join(created) or '(none)'}\n"
+                f"- Articles updated: {', '.join(updated) or '(none)'}\n"
+            )
     except Exception as e:
         print(f"  Error: {e}")
         return False

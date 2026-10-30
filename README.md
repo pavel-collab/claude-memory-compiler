@@ -73,7 +73,8 @@ semantic lint; prompts also instruct these text-only tasks not to use tools.
 This is not a general-purpose tool allowlist equivalent to Claude's `allowed_tools`.
 
 Compilation validates the returned article paths, source references, index, and
-build log before updating the source hash. Failed runs exit nonzero and remain
+unchanged source, then Python appends the build log entry before updating the
+source hash. Codex does not write the compilation log entry. Failed runs exit nonzero and remain
 eligible for retry. File edits are not transactional: a failed run can leave partial
 wiki changes. Failed flushes retain their temporary context file for manual retry.
 
